@@ -236,11 +236,62 @@ interface RawAgentConfig {
   [key: string]: unknown;
 }
 
+// Agent entry within openclaw.json's agents.list array
+interface OpenClawAgentListEntry {
+  id?: string;
+  name?: string;
+  emoji?: string;
+  model?: string;
+  capabilities?: string[];
+  [key: string]: unknown;
+}
+
+// Shape of the top-level openclaw.json for agent discovery
+interface OpenClawAgentSection {
+  defaults?: {
+    model?: { primary?: string };
+    [key: string]: unknown;
+  };
+  list?: OpenClawAgentListEntry[];
+}
+
 /**
- * Reads all agent configurations from ~/.openclaw/agents/*\/agent.json.
+ * Reads all agent configurations.
+ *
+ * Primary source: ~/.openclaw/openclaw.json → agents.list array
+ * Fallback: ~/.openclaw/agents/<name>/agent.json (one file per agent)
+ *
  * Returns an empty array when no agents are configured.
  */
 export async function readAgentConfigs(): Promise<AgentConfig[]> {
+  // ── Primary: agents.list in the main openclaw.json ───────────────────────
+  const mainConfig = await readJsonFile<{
+    agents?: OpenClawAgentSection;
+  }>(openclawPath("openclaw.json"));
+
+  const agentList = mainConfig?.agents?.list;
+  const defaultModel =
+    mainConfig?.agents?.defaults?.model?.primary ?? "unknown";
+
+  if (Array.isArray(agentList) && agentList.length > 0) {
+    return agentList
+      .filter((a) => a.id)
+      .map((a) => {
+        const id = String(a.id);
+        return {
+          id,
+          name: a.name ? String(a.name) : id.charAt(0).toUpperCase() + id.slice(1),
+          emoji: a.emoji ? String(a.emoji) : "?",
+          model: a.model ? String(a.model) : defaultModel,
+          capabilities: Array.isArray(a.capabilities)
+            ? (a.capabilities as string[])
+            : [],
+          dirPath: path.join(AGENTS_DIR, id),
+        };
+      });
+  }
+
+  // ── Fallback: per-agent agent.json files ──────────────────────────────────
   const entries = await listDirectory(AGENTS_DIR);
   const configs: AgentConfig[] = [];
 
@@ -248,18 +299,30 @@ export async function readAgentConfigs(): Promise<AgentConfig[]> {
     const agentDir = path.join(AGENTS_DIR, entry);
     if (!(await isDirectory(agentDir))) continue;
 
-    // Try both agent.json and openclaw.json inside the agent directory
+    // Try agent.json at the top of the agent dir, then inside an agent/ subdir
     const raw =
       (await readJsonFile<RawAgentConfig>(path.join(agentDir, "agent.json"))) ??
+      (await readJsonFile<RawAgentConfig>(path.join(agentDir, "agent", "agent.json"))) ??
       (await readJsonFile<RawAgentConfig>(path.join(agentDir, "openclaw.json")));
 
-    if (!raw) continue;
+    if (!raw) {
+      // No config file found — create a minimal entry just from the directory name
+      configs.push({
+        id: entry,
+        name: entry.charAt(0).toUpperCase() + entry.slice(1),
+        emoji: "?",
+        model: defaultModel,
+        capabilities: [],
+        dirPath: agentDir,
+      });
+      continue;
+    }
 
     configs.push({
       id: raw.id ?? entry,
       name: raw.name ?? entry,
       emoji: raw.emoji ?? "?",
-      model: raw.model ?? "unknown",
+      model: raw.model ?? defaultModel,
       capabilities: raw.capabilities ?? [],
       systemPrompt: raw.system_prompt ?? raw.systemPrompt,
       tools: raw.tools,
@@ -324,6 +387,36 @@ export interface SessionLogEntry {
   cost: number;
 }
 
+// The actual JSONL format uses top-level "type":"message" entries that wrap
+// the real data inside a "message" object.  This is the actual on-disk shape.
+interface RawSessionMessageEnvelope {
+  type: "message" | string;
+  id?: string;
+  parentId?: string;
+  timestamp?: string;
+  // The real payload lives here
+  message?: {
+    role?: string;
+    content?: unknown;
+    model?: string;
+    api?: string;
+    provider?: string;
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      totalTokens?: number;
+      cost?:
+        | number
+        | { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
+    };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+// Legacy flat format (kept for backward compatibility)
 interface RawSessionEntry {
   session_id?: string;
   sessionId?: string;
@@ -360,26 +453,86 @@ function calculateCost(
   );
 }
 
+/**
+ * Parses a single JSONL line from a session file.
+ *
+ * Handles two formats:
+ *  1. New envelope format: { type: "message", timestamp, message: { role, model, usage: { input, output, cost } } }
+ *  2. Legacy flat format: { role, model, input_tokens, output_tokens, cost }
+ *
+ * Returns null for non-message lines (e.g. type: "session", "model_change", "custom").
+ */
 function parseRawSessionEntry(
-  raw: RawSessionEntry,
+  raw: RawSessionMessageEnvelope & RawSessionEntry,
   agentId: string,
   sessionId: string
-): SessionLogEntry {
-  const inputTokens = raw.input_tokens ?? raw.inputTokens ?? 0;
-  const outputTokens = raw.output_tokens ?? raw.outputTokens ?? 0;
-  const model = raw.model ?? "unknown";
+): SessionLogEntry | null {
+  // ── New envelope format (actual on-disk format) ────────────────────────────
+  if (raw.type === "message" && raw.message) {
+    const msg = raw.message;
+    const usage = msg.usage ?? {};
+
+    const inputTokens = usage.input ?? 0;
+    const outputTokens = usage.output ?? 0;
+    const model = msg.model ?? "unknown";
+
+    let cost = 0;
+    if (usage.cost !== undefined) {
+      if (typeof usage.cost === "number") {
+        cost = usage.cost;
+      } else if (typeof usage.cost === "object" && usage.cost !== null) {
+        cost = (usage.cost as { total?: number }).total ?? 0;
+      }
+    }
+    if (cost === 0 && (inputTokens > 0 || outputTokens > 0)) {
+      cost = calculateCost(model, inputTokens, outputTokens);
+    }
+
+    // Only emit entries that have actual usage (saves memory for user turns)
+    // but still capture all turns for activity logs
+    let content = "";
+    if (Array.isArray(msg.content)) {
+      content = (msg.content as Array<{ type?: string; text?: string }>)
+        .filter((c) => c.type === "text" && c.text)
+        .map((c) => c.text ?? "")
+        .join(" ")
+        .slice(0, 500);
+    } else if (typeof msg.content === "string") {
+      content = (msg.content as string).slice(0, 500);
+    }
+
+    return {
+      sessionId: raw.id ?? sessionId,
+      agentId,
+      timestamp: raw.timestamp ?? new Date().toISOString(),
+      role: (msg.role as SessionLogEntry["role"]) ?? "assistant",
+      content,
+      model,
+      inputTokens,
+      outputTokens,
+      cost,
+    };
+  }
+
+  // ── Legacy flat format ─────────────────────────────────────────────────────
+  const legacyRaw = raw as RawSessionEntry;
+  if (!legacyRaw.role) return null; // Not a message entry
+
+  const inputTokens = legacyRaw.input_tokens ?? legacyRaw.inputTokens ?? 0;
+  const outputTokens = legacyRaw.output_tokens ?? legacyRaw.outputTokens ?? 0;
+  const model = legacyRaw.model ?? "unknown";
 
   const cost =
-    raw.cost !== undefined && raw.cost > 0
-      ? raw.cost
+    legacyRaw.cost !== undefined && (legacyRaw.cost as number) > 0
+      ? (legacyRaw.cost as number)
       : calculateCost(model, inputTokens, outputTokens);
 
   return {
-    sessionId: raw.session_id ?? raw.sessionId ?? sessionId,
-    agentId: raw.agent_id ?? raw.agentId ?? agentId,
-    timestamp: raw.timestamp ?? new Date().toISOString(),
-    role: (raw.role as SessionLogEntry["role"]) ?? "assistant",
-    content: raw.content ?? "",
+    sessionId: legacyRaw.session_id ?? legacyRaw.sessionId ?? sessionId,
+    agentId: legacyRaw.agent_id ?? legacyRaw.agentId ?? agentId,
+    timestamp: legacyRaw.timestamp ?? new Date().toISOString(),
+    role: (legacyRaw.role as SessionLogEntry["role"]) ?? "assistant",
+    content: legacyRaw.content ?? "",
     model,
     inputTokens,
     outputTokens,
@@ -391,6 +544,7 @@ function parseRawSessionEntry(
  * Reads all .jsonl session files for a given agent from:
  *   ~/.openclaw/agents/<agentId>/sessions/*.jsonl
  *
+ * Skips deleted/reset/backup files.
  * Returns entries sorted newest-first.
  */
 export async function readAgentSessions(
@@ -398,7 +552,16 @@ export async function readAgentSessions(
 ): Promise<SessionLogEntry[]> {
   const sessionsDir = path.join(AGENTS_DIR, agentId, "sessions");
   const files = await listDirectory(sessionsDir);
-  const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
+
+  // Only process active JSONL files — skip deleted, reset, backup variants
+  const jsonlFiles = files.filter(
+    (f) =>
+      f.endsWith(".jsonl") &&
+      !f.includes(".deleted") &&
+      !f.includes(".reset") &&
+      !f.includes(".backup")
+  );
+
   const allEntries: SessionLogEntry[] = [];
 
   for (const file of jsonlFiles) {
@@ -410,8 +573,9 @@ export async function readAgentSessions(
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        const entry = JSON.parse(trimmed) as RawSessionEntry;
-        allEntries.push(parseRawSessionEntry(entry, agentId, sessionId));
+        const entry = JSON.parse(trimmed) as RawSessionMessageEnvelope & RawSessionEntry;
+        const parsed = parseRawSessionEntry(entry, agentId, sessionId);
+        if (parsed) allEntries.push(parsed);
       } catch {
         // Malformed line — skip silently
       }
