@@ -21,7 +21,7 @@ function sourceBadgeVariant(source: Skill["source"]): "default" | "secondary" | 
 }
 
 export default function SkillsPage() {
-  const { skills, setSkills } = useStore();
+  const { skills, setSkills, hydrated } = useStore();
   const [filter, setFilter] = useState<SkillFilter>("all");
 
   const filtered = skills.filter((s) => {
@@ -36,6 +36,26 @@ export default function SkillsPage() {
 
   const installedCount  = skills.filter((s) => s.installed).length;
   const availableCount  = skills.filter((s) => !s.installed).length;
+
+  if (!hydrated) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-[40vh]">
+        <p className="text-sm text-muted-foreground animate-pulse">Loading skills...</p>
+      </div>
+    );
+  }
+
+  if (skills.length === 0) {
+    return (
+      <div className="p-6 flex flex-col items-center justify-center min-h-[40vh] gap-3">
+        <Package className="h-10 w-10 text-muted-foreground" />
+        <h2 className="text-lg font-semibold">No skills found</h2>
+        <p className="text-sm text-muted-foreground text-center max-w-md">
+          Skills will appear here once installed in <code className="bg-muted px-1 rounded">~/.openclaw/workspace/skills/</code>.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-4">

@@ -28,7 +28,7 @@ function humanSchedule(cron: string): string {
 }
 
 export default function CronPage() {
-  const { cronJobs, setCronJobs, agents } = useStore();
+  const { cronJobs, setCronJobs, agents, hydrated } = useStore();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newName, setNewName]       = useState("");
   const [newSchedule, setNewSchedule] = useState("0 9 * * *");
@@ -58,6 +58,14 @@ export default function CronPage() {
     setDialogOpen(false);
   }
 
+  if (!hydrated) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-[40vh]">
+        <p className="text-sm text-muted-foreground animate-pulse">Loading cron jobs...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -81,6 +89,13 @@ export default function CronPage() {
             </tr>
           </thead>
           <tbody>
+            {cronJobs.length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-5 py-12 text-center text-muted-foreground text-sm">
+                  No cron jobs configured. Add one above or define them in your OpenClaw config.
+                </td>
+              </tr>
+            )}
             {cronJobs.map((job) => {
               const agent = agents.find((a) => a.id === job.agentId);
               return (

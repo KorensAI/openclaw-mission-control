@@ -34,13 +34,33 @@ function channelColor(type: Channel["type"]): string {
 }
 
 export default function ChannelsPage() {
-  const { channels, setChannels } = useStore();
+  const { channels, setChannels, hydrated } = useStore();
 
   function toggleConnection(id: string) {
     setChannels(channels.map((ch) => {
       if (ch.id !== id) return ch;
       return { ...ch, status: ch.status === "connected" ? "disconnected" : "connected" };
     }));
+  }
+
+  if (!hydrated) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-[40vh]">
+        <p className="text-sm text-muted-foreground animate-pulse">Loading channels...</p>
+      </div>
+    );
+  }
+
+  if (channels.length === 0) {
+    return (
+      <div className="p-6 flex flex-col items-center justify-center min-h-[40vh] gap-3">
+        <MessageCircle className="h-10 w-10 text-muted-foreground" />
+        <h2 className="text-lg font-semibold">No channels configured</h2>
+        <p className="text-sm text-muted-foreground text-center max-w-md">
+          Communication channels (Telegram, Discord, Slack, etc.) will appear here once configured in your OpenClaw setup.
+        </p>
+      </div>
+    );
   }
 
   return (

@@ -37,7 +37,7 @@ function levelTextColor(level: LogEntry["level"]): string {
 }
 
 export default function LogsPage() {
-  const { logs, clearLogs, agents } = useStore();
+  const { logs, clearLogs, agents, hydrated } = useStore();
   const [levelFilter, setLevelFilter] = useState<LevelFilter>("all");
   const [agentFilter, setAgentFilter] = useState<string>("all");
   const [autoScroll, setAutoScroll]   = useState(true);
@@ -54,6 +54,14 @@ export default function LogsPage() {
       bottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [logs, autoScroll]);
+
+  if (!hydrated) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-[40vh]">
+        <p className="text-sm text-muted-foreground animate-pulse">Loading logs...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 h-[calc(100vh-64px)] flex flex-col gap-4">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,20 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Save, Moon, Sun } from "lucide-react";
 
+interface OpenClawConfig {
+  version?: string;
+  defaultModel?: string;
+  gatewayAddress?: string;
+  gatewayPort?: number;
+  logLevel?: string;
+  [key: string]: unknown;
+}
+
 export default function SettingsPage() {
-  const { gateway, theme, toggleTheme } = useStore();
+  const { gateway, theme, toggleTheme, hydrated } = useStore();
+
+  const [config, setConfig] = useState<OpenClawConfig | null>(null);
+  const [configLoaded, setConfigLoaded] = useState(false);
 
   const [gatewayAddress, setGatewayAddress] = useState(gateway.address);
   const [authEnabled, setAuthEnabled]       = useState(false);
@@ -23,9 +35,42 @@ export default function SettingsPage() {
   const [notifyTask, setNotifyTask]         = useState(false);
   const [saved, setSaved]                   = useState(false);
 
+  // Fetch config from API
+  useEffect(() => {
+    fetch("/api/config")
+      .then((res) => (res.ok ? res.json() : { installed: false, config: null }))
+      .then((data: { installed: boolean; config: OpenClawConfig | null }) => {
+        setConfig(data.config);
+        if (data.config?.gatewayAddress) {
+          setGatewayAddress(data.config.gatewayAddress);
+        } else if (data.config?.gatewayPort) {
+          setGatewayAddress(`ws://127.0.0.1:${data.config.gatewayPort}`);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setConfigLoaded(true));
+  }, []);
+
+  // Update gateway address when store gateway changes
+  useEffect(() => {
+    if (gateway.address && gateway.address !== "ws://127.0.0.1:18789") {
+      setGatewayAddress(gateway.address);
+    }
+  }, [gateway.address]);
+
   function handleSave() {
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  }
+
+  const displayVersion = config?.version ?? gateway.version;
+
+  if (!hydrated || !configLoaded) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-[40vh]">
+        <p className="text-sm text-muted-foreground animate-pulse">Loading settings...</p>
+      </div>
+    );
   }
 
   return (
@@ -48,7 +93,7 @@ export default function SettingsPage() {
               <p className="text-sm font-medium">Version</p>
               <p className="text-xs text-muted-foreground">Current gateway version</p>
             </div>
-            <Badge variant="secondary">v{gateway.version}</Badge>
+            <Badge variant="secondary">v{displayVersion}</Badge>
           </div>
           <div className="flex items-center justify-between">
             <div>
@@ -59,6 +104,24 @@ export default function SettingsPage() {
               {gateway.running ? "Running" : "Stopped"}
             </Badge>
           </div>
+          {config?.defaultModel && (
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Default Model</p>
+                <p className="text-xs text-muted-foreground">From OpenClaw config</p>
+              </div>
+              <span className="text-sm font-mono text-muted-foreground">{config.defaultModel}</span>
+            </div>
+          )}
+          {config?.logLevel && (
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Log Level</p>
+                <p className="text-xs text-muted-foreground">Current verbosity</p>
+              </div>
+              <Badge variant="outline">{config.logLevel}</Badge>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -146,7 +209,7 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-2 text-sm text-muted-foreground">
           <div className="flex justify-between"><span>Mission Control Version</span><span className="font-mono">0.1.0</span></div>
-          <div className="flex justify-between"><span>Gateway Version</span><span className="font-mono">{gateway.version}</span></div>
+          <div className="flex justify-between"><span>Gateway Version</span><span className="font-mono">{displayVersion}</span></div>
           <div className="flex justify-between"><span>Framework</span><span className="font-mono">Next.js 16</span></div>
           <div className="flex justify-between"><span>UI</span><span className="font-mono">shadcn/ui + Tailwind v4</span></div>
         </CardContent>

@@ -36,7 +36,7 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { sidebarOpen, toggleSidebar, gateway, tasks } = useStore();
+  const { sidebarOpen, toggleSidebar, gateway, tasks, agents } = useStore();
   const inboxCount = tasks.filter((t) => t.status === "inbox").length;
 
   return (
@@ -135,9 +135,10 @@ export function Sidebar() {
         <div className="border-t border-border/40 p-4">
           <p className="text-xs text-muted-foreground mb-2">Active Agents</p>
           <div className="flex items-center gap-1">
-            {useStore
-              .getState()
-              .agents.map((agent) => (
+            {agents.length === 0 ? (
+              <span className="text-xs text-muted-foreground">No agents</span>
+            ) : (
+              agents.map((agent) => (
                 <div
                   key={agent.id}
                   className={cn(
@@ -151,7 +152,8 @@ export function Sidebar() {
                 >
                   {agent.emoji}
                 </div>
-              ))}
+              ))
+            )}
           </div>
         </div>
       )}

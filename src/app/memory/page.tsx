@@ -29,7 +29,7 @@ function typeLabel(type: MemoryEntry["type"]): string {
 }
 
 export default function MemoryPage() {
-  const { memories, agents, setMemories } = useStore();
+  const { memories, agents, setMemories, hydrated } = useStore();
   const [typeFilter, setTypeFilter]   = useState<MemoryTypeFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -50,6 +50,14 @@ export default function MemoryPage() {
 
   function deleteMemory(id: string) {
     setMemories(memories.filter((m) => m.id !== id));
+  }
+
+  if (!hydrated) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-[40vh]">
+        <p className="text-sm text-muted-foreground animate-pulse">Loading memory files...</p>
+      </div>
+    );
   }
 
   return (

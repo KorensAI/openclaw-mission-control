@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useStore } from "@/lib/store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,25 +16,61 @@ interface ChatMessage {
   timestamp: string;
 }
 
-const DEMO_HISTORY: Record<string, ChatMessage[]> = {
-  "agent-1": [
-    { id: "m1", role: "user",  content: "Review PR #42 for auth changes", timestamp: new Date(Date.now() - 3600000).toISOString() },
-    { id: "m2", role: "agent", content: "I have started reviewing PR #42. The authentication refactor looks solid overall. I noticed one potential issue with token expiry handling in auth.ts line 87.", timestamp: new Date(Date.now() - 3590000).toISOString() },
-    { id: "m3", role: "user",  content: "What exactly is the issue?", timestamp: new Date(Date.now() - 3500000).toISOString() },
-    { id: "m4", role: "agent", content: "The refreshToken function does not handle network errors gracefully. If the refresh request fails, the user is silently logged out without any notification. I recommend wrapping the call in a try-catch and showing an error toast.", timestamp: new Date(Date.now() - 3480000).toISOString() },
-  ],
-  "agent-2": [
-    { id: "m5", role: "user",  content: "Send me the weekly expense summary", timestamp: new Date(Date.now() - 600000).toISOString() },
-    { id: "m6", role: "agent", content: "Weekly expense summary for the past 7 days: Total spent: ,847.32. Top categories: Infrastructure (,200), SaaS Tools (), Marketing (). 3 invoices pending payment.", timestamp: new Date(Date.now() - 590000).toISOString() },
-  ],
-  "agent-3": [],
-};
-
 export default function ChatPage() {
-  const { agents } = useStore();
-  const [selectedAgent, setSelectedAgent] = useState<string>(agents[0]?.id ?? "");
-  const [histories, setHistories] = useState<Record<string, ChatMessage[]>>(DEMO_HISTORY);
+  const { agents, hydrated } = useStore();
+  const [selectedAgent, setSelectedAgent] = useState<string>("");
+  const [histories, setHistories] = useState<Record<string, ChatMessage[]>>({});
   const [inputValue, setInputValue] = useState("");
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const loadedAgents = useRef<Set<string>>(new Set());
+
+  // Auto-select first agent once hydrated
+  useEffect(() => {
+    if (hydrated && agents.length > 0 && !selectedAgent) {
+      setSelectedAgent(agents[0].id);
+    }
+  }, [hydrated, agents, selectedAgent]);
+
+  // Load session history from API when an agent is selected
+  useEffect(() => {
+    if (!selectedAgent || loadedAgents.current.has(selectedAgent)) return;
+
+    let cancelled = false;
+    setLoadingHistory(true);
+
+    fetch(`/api/sessions?agentId=${encodeURIComponent(selectedAgent)}&limit=50`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((entries: Array<{ timestamp: string; role: string; content: string }>) => {
+        if (cancelled) return;
+        loadedAgents.current.add(selectedAgent);
+
+        // Convert session entries to chat messages (oldest first for display)
+        const msgs: ChatMessage[] = entries
+          .filter((e) => e.content && e.content.trim().length > 0)
+          .reverse()
+          .map((e, i) => ({
+            id: `session-${selectedAgent}-${i}`,
+            role: e.role === "user" ? "user" as const : "agent" as const,
+            content: e.content,
+            timestamp: e.timestamp,
+          }));
+
+        setHistories((prev) => ({
+          ...prev,
+          [selectedAgent]: msgs,
+        }));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          loadedAgents.current.add(selectedAgent);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingHistory(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedAgent]);
 
   const messages = histories[selectedAgent] ?? [];
   const agent    = agents.find((a) => a.id === selectedAgent);
@@ -64,6 +100,14 @@ export default function ChatPage() {
     setInputValue("");
   }
 
+  if (!hydrated) {
+    return (
+      <div className="h-[calc(100vh-64px)] flex items-center justify-center">
+        <p className="text-sm text-muted-foreground animate-pulse">Loading chat...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="h-[calc(100vh-64px)] flex">
       {/* Agent List */}
@@ -73,6 +117,9 @@ export default function ChatPage() {
         </div>
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-1">
+            {agents.length === 0 && (
+              <p className="text-xs text-muted-foreground px-3 py-4">No agents found.</p>
+            )}
             {agents.map((a) => (
               <button
                 key={a.id}
@@ -124,7 +171,12 @@ export default function ChatPage() {
         {/* Messages */}
         <ScrollArea className="flex-1 p-4">
           <div className="space-y-4 max-w-3xl mx-auto">
-            {messages.length === 0 && (
+            {loadingHistory && (
+              <p className="text-muted-foreground text-sm text-center py-4 animate-pulse">
+                Loading session history...
+              </p>
+            )}
+            {!loadingHistory && messages.length === 0 && (
               <p className="text-muted-foreground text-sm text-center py-12">
                 No messages yet. Send a message to {agent?.name ?? "this agent"}.
               </p>

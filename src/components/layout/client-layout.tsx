@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { Sidebar } from "./sidebar";
 import { Header } from "./header";
@@ -7,7 +8,12 @@ import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 
 export function ClientLayout({ children }: { children: React.ReactNode }) {
-  const { sidebarOpen, theme } = useStore();
+  const { sidebarOpen, theme, hydrate } = useStore();
+
+  // Hydrate the store with real data from API endpoints on first mount
+  useEffect(() => {
+    hydrate();
+  }, [hydrate]);
 
   return (
     <div className={theme}>

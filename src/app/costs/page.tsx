@@ -17,11 +17,33 @@ const MODEL_COLORS: Record<string, string> = {
 function shortModel(model: string): string {
   if (model.includes("sonnet")) return "Sonnet";
   if (model.includes("haiku"))  return "Haiku";
+  if (model.includes("opus"))   return "Opus";
   return model;
 }
 
 export default function CostsPage() {
-  const { costEntries, agents } = useStore();
+  const { costEntries, agents, hydrated } = useStore();
+
+  if (!hydrated) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-[40vh]">
+        <p className="text-sm text-muted-foreground animate-pulse">Loading cost data...</p>
+      </div>
+    );
+  }
+
+  if (costEntries.length === 0) {
+    return (
+      <div className="p-6 flex flex-col items-center justify-center min-h-[40vh] gap-3">
+        <DollarSign className="h-10 w-10 text-muted-foreground" />
+        <h2 className="text-lg font-semibold">No cost data yet</h2>
+        <p className="text-sm text-muted-foreground text-center max-w-md">
+          Cost entries will appear here once agents start processing sessions.
+          Data is read from <code className="bg-muted px-1 rounded">~/.openclaw/costs.jsonl</code> or derived from session logs.
+        </p>
+      </div>
+    );
+  }
 
   const today     = new Date().toISOString().split("T")[0];
   const todayCost = costEntries.filter((e) => e.date === today).reduce((s, e) => s + e.cost, 0);
